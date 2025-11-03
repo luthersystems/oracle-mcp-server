@@ -203,11 +203,9 @@ async def search_tables_schema(search_term: str, ctx: Context) -> str:
             })
         return f"No tables found matching any of these terms: {', '.join(search_terms)}"
     
-    matching_tables = limited_tables
-    
     if OUTPUT_FORMAT == "json":
         json_results = []
-        for table_name in matching_tables:
+        for table_name in limited_tables:
             table_info = await db_context.get_schema_info(table_name)
             if table_info:
                 json_results.append({
@@ -231,7 +229,7 @@ async def search_tables_schema(search_term: str, ctx: Context) -> str:
         results = [f"Found {total_matches} tables matching terms ({', '.join(search_terms)}):"]
     
     # Now load the schema for each matching table
-    for table_name in matching_tables:
+    for table_name in limited_tables:
         table_info = await db_context.get_schema_info(table_name)
         if not table_info:
             continue
@@ -684,7 +682,11 @@ async def run_sql_query(sql: str, ctx: Context, max_rows: int = 100) -> str:
         if not result.get("rows"):
             # Write or empty read response
             if "message" in result:
+                if OUTPUT_FORMAT == "json":
+                    return wrap_untrusted(format_as_json({"message": result["message"]}))
                 return wrap_untrusted(result["message"])  # keep consistency
+            if OUTPUT_FORMAT == "json":
+                return wrap_untrusted(format_as_json({"message": "Query executed successfully, but returned no rows."}))
             return wrap_untrusted("Query executed successfully, but returned no rows.")
         formatted_result = format_sql_query_result(result, output_format=OUTPUT_FORMAT)
         return wrap_untrusted(formatted_result)
