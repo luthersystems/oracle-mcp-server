@@ -84,9 +84,12 @@ Relationships:
 
 For less than RELATIONSHIP_GROUPING_THRESHOLD relationships, each relationship is listed individually without grouping.
 """
-from typing import List, Dict, Any, Set, Tuple
+from typing import List, Dict, Any, Set, Tuple, Optional
 import re
+import json
 from collections import defaultdict
+from datetime import datetime, date
+from decimal import Decimal
 
 # Configuration constants
 RELATIONSHIP_GROUPING_THRESHOLD = 10  # Number of relationships before grouping is applied
@@ -363,19 +366,62 @@ def _format_relationship_groups(groups: List[Dict[str, Any]], result: List[str])
             for pattern in sorted(group['column_patterns']):
                 result.append(f"      {pattern}")
 
-def format_sql_query_result(result: Dict[str, Any]) -> str:
+def _json_serializer(obj: Any) -> Any:
+    """Custom JSON serializer for objects not serializable by default json code."""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    # Handle Oracle-specific types
+    if hasattr(obj, '__class__') and 'oracle' in str(type(obj)).lower():
+        return str(obj)
+    raise TypeError(f"Type {type(obj)} not serializable")
+
+
+def format_as_json(data: Any) -> str:
     """
-    Format SQL query results as a markdown table.
+    Format any data structure as JSON string.
+    
+    Args:
+        data: Any JSON-serializable data structure
+        
+    Returns:
+        Formatted JSON string with indentation
+    """
+    return json.dumps(data, indent=2, default=_json_serializer)
+
+
+def format_sql_query_result(result: Dict[str, Any], output_format: str = "markdown") -> str:
+    """
+    Format SQL query results as either a markdown table or JSON.
     
     Args:
         result: Dictionary containing query results with 'columns' and 'rows' keys
+        output_format: Format to use - either "markdown" or "json" (default: "markdown")
         
     Returns:
-        Formatted markdown table string
+        Formatted string (markdown table or JSON)
     """
     if not result.get("rows"):
+        if output_format.lower() == "json":
+            return json.dumps({
+                "row_count": 0,
+                "columns": result.get("columns", []),
+                "rows": [],
+                "message": "Query executed successfully, but returned no rows."
+            }, indent=2, default=_json_serializer)
         return "Query executed successfully, but returned no rows."
 
+    # JSON format
+    if output_format.lower() == "json":
+        json_result = {
+            "row_count": result.get("row_count", len(result.get("rows", []))),
+            "columns": result.get("columns", []),
+            "rows": result.get("rows", [])
+        }
+        return json.dumps(json_result, indent=2, default=_json_serializer)
+
+    # Markdown format (default)
     headers = [str(h) for h in result["columns"]]
     rows = result["rows"]
 

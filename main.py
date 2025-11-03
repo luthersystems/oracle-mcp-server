@@ -12,7 +12,8 @@ import oracledb
 
 from db_context import DatabaseContext
 from db_context.utils import wrap_untrusted
-from db_context.schema.formatter import format_sql_query_result
+from db_context.schema.formatter import format_sql_query_result, format_as_json
+from db_context.models import TableInfo
 
 # Load environment variables from .env file
 load_dotenv()
@@ -23,6 +24,7 @@ CACHE_DIR = os.getenv('CACHE_DIR', '.cache')
 USE_THICK_MODE = os.getenv('THICK_MODE', '').lower() in ('true', '1', 'yes')  # Convert string to boolean
 READ_ONLY_MODE = os.getenv('READ_ONLY_MODE', 'true').lower() not in ('false', '0', 'no')
 ORACLE_CLIENT_LIB_DIR = os.getenv('ORACLE_CLIENT_LIB_DIR', None)
+OUTPUT_FORMAT = os.getenv('OUTPUT_FORMAT', 'markdown').lower()  # Output format: 'markdown' or 'json'
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[DatabaseContext]:
@@ -75,7 +77,19 @@ async def get_table_schema(table_name: str, ctx: Context) -> str:
     table_info = await db_context.get_schema_info(table_name)
     
     if not table_info:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({"error": f"Table '{table_name}' not found in the schema."})
         return f"Table '{table_name}' not found in the schema."
+    
+    if OUTPUT_FORMAT == "json":
+        # Convert TableInfo dataclass to dict for JSON serialization
+        result = {
+            "table_name": table_info.table_name,
+            "columns": table_info.columns,
+            "relationships": table_info.relationships,
+            "fully_loaded": table_info.fully_loaded
+        }
+        return format_as_json(result)
     
     # Delegate formatting to the TableInfo model
     return table_info.format_schema()
@@ -92,8 +106,19 @@ async def rebuild_schema_cache(ctx: Context) -> str:
     try:
         await db_context.rebuild_cache()
         cache_size = len(db_context.schema_manager.cache.all_table_names) if db_context.schema_manager.cache else 0
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "success": True,
+                "message": f"Schema cache rebuilt successfully. Indexed {cache_size} tables.",
+                "cache_size": cache_size
+            })
         return f"Schema cache rebuilt successfully. Indexed {cache_size} tables."
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "success": False,
+                "error": f"Failed to rebuild schema cache: {str(e)}"
+            })
         return f"Failed to rebuild schema cache: {str(e)}"
 
 @mcp.tool()
@@ -105,8 +130,27 @@ async def get_tables_schema(table_names: List[str], ctx: Context) -> str:
     Avoid: Broad discovery (use search_tables_schema first).
     """
     db_context: DatabaseContext = ctx.request_context.lifespan_context
-    results = []
     
+    if OUTPUT_FORMAT == "json":
+        json_results = []
+        for table_name in table_names:
+            table_info = await db_context.get_schema_info(table_name)
+            if not table_info:
+                json_results.append({
+                    "table_name": table_name,
+                    "error": f"Table '{table_name}' not found in the schema."
+                })
+            else:
+                json_results.append({
+                    "table_name": table_info.table_name,
+                    "columns": table_info.columns,
+                    "relationships": table_info.relationships,
+                    "fully_loaded": table_info.fully_loaded
+                })
+        return format_as_json(json_results)
+    
+    # Markdown format
+    results = []
     for table_name in table_names:
         table_info = await db_context.get_schema_info(table_name)
         if not table_info:
@@ -133,6 +177,8 @@ async def search_tables_schema(search_term: str, ctx: Context) -> str:
     search_terms = [term for term in search_terms if term]
     
     if not search_terms:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({"error": "No valid search terms provided"})
         return "No valid search terms provided"
     
     # Track all matching tables without duplicates
@@ -149,14 +195,40 @@ async def search_tables_schema(search_term: str, ctx: Context) -> str:
     limited_tables = matching_tables[:20]
     
     if not matching_tables:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "total_matches": 0,
+                "search_terms": search_terms,
+                "tables": []
+            })
         return f"No tables found matching any of these terms: {', '.join(search_terms)}"
     
+    matching_tables = limited_tables
+    
+    if OUTPUT_FORMAT == "json":
+        json_results = []
+        for table_name in matching_tables:
+            table_info = await db_context.get_schema_info(table_name)
+            if table_info:
+                json_results.append({
+                    "table_name": table_info.table_name,
+                    "columns": table_info.columns,
+                    "relationships": table_info.relationships,
+                    "fully_loaded": table_info.fully_loaded
+                })
+        return format_as_json({
+            "total_matches": total_matches,
+            "returned_count": len(json_results),
+            "truncated": total_matches > 20,
+            "search_terms": search_terms,
+            "tables": json_results
+        })
+    
+    # Markdown format
     if total_matches > 20:
         results = [f"Found {total_matches} tables matching terms ({', '.join(search_terms)}). Returning the first 20 for performance reasons:"]
     else:
         results = [f"Found {total_matches} tables matching terms ({', '.join(search_terms)}):"]
-    
-    matching_tables = limited_tables
     
     # Now load the schema for each matching table
     for table_name in matching_tables:
@@ -183,8 +255,14 @@ async def get_database_vendor_info(ctx: Context) -> str:
         db_info = await db_context.get_database_info()
         
         if not db_info:
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({"error": "Could not retrieve database vendor information."})
             return "Could not retrieve database vendor information."
         
+        if OUTPUT_FORMAT == "json":
+            return format_as_json(db_info)
+        
+        # Markdown format
         result = [f"Database Vendor: {db_info.get('vendor', 'Unknown')}"]
         result.append(f"Version: {db_info.get('version', 'Unknown')}")
         if "schema" in db_info:
@@ -200,6 +278,8 @@ async def get_database_vendor_info(ctx: Context) -> str:
             
         return "\n".join(result)
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({"error": f"Error retrieving database vendor information: {str(e)}"})
         return f"Error retrieving database vendor information: {str(e)}"
 
 @mcp.tool()
@@ -216,8 +296,22 @@ async def search_columns(search_term: str, ctx: Context) -> str:
         matching_columns = await db_context.search_columns(search_term, limit=50)
         
         if not matching_columns:
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({
+                    "search_term": search_term,
+                    "table_count": 0,
+                    "columns_by_table": {}
+                })
             return f"No columns found matching '{search_term}'"
         
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "search_term": search_term,
+                "table_count": len(matching_columns),
+                "columns_by_table": matching_columns
+            })
+        
+        # Markdown format
         results = [f"Found columns matching '{search_term}' in {len(matching_columns)} tables:"]
         
         for table_name, columns in matching_columns.items():
@@ -229,6 +323,8 @@ async def search_columns(search_term: str, ctx: Context) -> str:
         
         return "\n".join(results)
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({"error": f"Error searching columns: {str(e)}"})
         return f"Error searching columns: {str(e)}"
 
 @mcp.tool()
@@ -246,8 +342,24 @@ async def get_pl_sql_objects(object_type: str, name_pattern: Optional[str], ctx:
         
         if not objects:
             pattern_msg = f" matching '{name_pattern}'" if name_pattern else ""
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({
+                    "object_type": object_type.upper(),
+                    "name_pattern": name_pattern,
+                    "count": 0,
+                    "objects": []
+                })
             return f"No {object_type.upper()} objects found{pattern_msg}"
         
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "object_type": object_type.upper(),
+                "name_pattern": name_pattern,
+                "count": len(objects),
+                "objects": objects
+            })
+        
+        # Markdown format
         results = [f"Found {len(objects)} {object_type.upper()} objects:"]
         
         for obj in objects:
@@ -263,6 +375,8 @@ async def get_pl_sql_objects(object_type: str, name_pattern: Optional[str], ctx:
         
         return "\n".join(results)
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({"error": f"Error retrieving PL/SQL objects: {str(e)}"})
         return f"Error retrieving PL/SQL objects: {str(e)}"
 
 @mcp.tool()
@@ -279,10 +393,29 @@ async def get_object_source(object_type: str, object_name: str, ctx: Context) ->
         source = await db_context.get_object_source(object_type.upper(), object_name.upper())
         
         if not source:
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({
+                    "object_type": object_type.upper(),
+                    "object_name": object_name.upper(),
+                    "error": f"No source found for {object_type} {object_name}"
+                })
             return wrap_untrusted(f"No source found for {object_type} {object_name}")
+        
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "object_type": object_type.upper(),
+                "object_name": object_name.upper(),
+                "source": source
+            })
         
         return wrap_untrusted(f"Source for {object_type} {object_name}:\n\n{source}")
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "object_type": object_type.upper(),
+                "object_name": object_name.upper(),
+                "error": f"Error retrieving object source: {str(e)}"
+            })
         return wrap_untrusted(f"Error retrieving object source: {str(e)}")
 
 @mcp.tool()
@@ -299,8 +432,20 @@ async def get_table_constraints(table_name: str, ctx: Context) -> str:
         constraints = await db_context.get_table_constraints(table_name)
         
         if not constraints:
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({
+                    "table_name": table_name,
+                    "constraints": []
+                })
             return f"No constraints found for table '{table_name}'"
         
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "table_name": table_name,
+                "constraints": constraints
+            })
+        
+        # Markdown format
         results = [f"Constraints for table '{table_name}':"]
         
         for constraint in constraints:
@@ -321,6 +466,11 @@ async def get_table_constraints(table_name: str, ctx: Context) -> str:
         
         return "\n".join(results)
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "table_name": table_name,
+                "error": f"Error retrieving constraints: {str(e)}"
+            })
         return f"Error retrieving constraints: {str(e)}"
 
 @mcp.tool()
@@ -337,8 +487,20 @@ async def get_table_indexes(table_name: str, ctx: Context) -> str:
         indexes = await db_context.get_table_indexes(table_name)
         
         if not indexes:
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({
+                    "table_name": table_name,
+                    "indexes": []
+                })
             return f"No indexes found for table '{table_name}'"
         
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "table_name": table_name,
+                "indexes": indexes
+            })
+        
+        # Markdown format
         results = [f"Indexes for table '{table_name}':"]
         
         for idx in indexes:
@@ -354,6 +516,11 @@ async def get_table_indexes(table_name: str, ctx: Context) -> str:
         
         return "\n".join(results)
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "table_name": table_name,
+                "error": f"Error retrieving indexes: {str(e)}"
+            })
         return f"Error retrieving indexes: {str(e)}"
 
 @mcp.tool()
@@ -370,8 +537,20 @@ async def get_dependent_objects(object_name: str, ctx: Context) -> str:
         dependencies = await db_context.get_dependent_objects(object_name.upper())
         
         if not dependencies:
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({
+                    "object_name": object_name.upper(),
+                    "dependencies": []
+                })
             return f"No objects found that depend on '{object_name}'"
         
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "object_name": object_name.upper(),
+                "dependencies": dependencies
+            })
+        
+        # Markdown format
         results = [f"Objects that depend on '{object_name}':"]
         
         for dep in dependencies:
@@ -381,6 +560,11 @@ async def get_dependent_objects(object_name: str, ctx: Context) -> str:
         
         return "\n".join(results)
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "object_name": object_name.upper(),
+                "error": f"Error retrieving dependencies: {str(e)}"
+            })
         return f"Error retrieving dependencies: {str(e)}"
 
 @mcp.tool()
@@ -398,8 +582,20 @@ async def get_user_defined_types(type_pattern: Optional[str], ctx: Context) -> s
         
         if not types:
             pattern_msg = f" matching '{type_pattern}'" if type_pattern else ""
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({
+                    "type_pattern": type_pattern,
+                    "types": []
+                })
             return f"No user-defined types found{pattern_msg}"
         
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "type_pattern": type_pattern,
+                "types": types
+            })
+        
+        # Markdown format
         results = [f"User-defined types:"]
         
         for typ in types:
@@ -414,6 +610,11 @@ async def get_user_defined_types(type_pattern: Optional[str], ctx: Context) -> s
         
         return "\n".join(results)
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "type_pattern": type_pattern,
+                "error": f"Error retrieving user-defined types: {str(e)}"
+            })
         return f"Error retrieving user-defined types: {str(e)}"
 
 @mcp.tool()
@@ -430,8 +631,22 @@ async def get_related_tables(table_name: str, ctx: Context) -> str:
         related = await db_context.get_related_tables(table_name)
         
         if not related['referenced_tables'] and not related['referencing_tables']:
+            if OUTPUT_FORMAT == "json":
+                return format_as_json({
+                    "table_name": table_name,
+                    "referenced_tables": [],
+                    "referencing_tables": []
+                })
             return f"No related tables found for '{table_name}'"
         
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "table_name": table_name,
+                "referenced_tables": related.get('referenced_tables', []),
+                "referencing_tables": related.get('referencing_tables', [])
+            })
+        
+        # Markdown format
         results = [f"Tables related to '{table_name}':"]
         
         if related['referenced_tables']:
@@ -447,6 +662,11 @@ async def get_related_tables(table_name: str, ctx: Context) -> str:
         return "\n".join(results)
         
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({
+                "table_name": table_name,
+                "error": f"Error getting related tables: {str(e)}"
+            })
         return f"Error getting related tables: {str(e)}"
 
 @mcp.tool()
@@ -466,7 +686,7 @@ async def run_sql_query(sql: str, ctx: Context, max_rows: int = 100) -> str:
             if "message" in result:
                 return wrap_untrusted(result["message"])  # keep consistency
             return wrap_untrusted("Query executed successfully, but returned no rows.")
-        formatted_result = format_sql_query_result(result)
+        formatted_result = format_sql_query_result(result, output_format=OUTPUT_FORMAT)
         return wrap_untrusted(formatted_result)
     except PermissionError as e:
         return wrap_untrusted(f"Permission error: {e}")
@@ -489,7 +709,11 @@ async def explain_query_plan(sql: str, ctx: Context) -> str:
     db_context: DatabaseContext = ctx.request_context.lifespan_context
     try:
         plan = await db_context.explain_query_plan(sql)
-        # Standardize error wrapping
+        
+        if OUTPUT_FORMAT == "json":
+            return format_as_json(plan)
+        
+        # Standardize error wrapping for markdown
         if plan.get("error"):
             return wrap_untrusted(f"Explain plan unavailable: {plan['error']}")
         if not plan.get("execution_plan"):
@@ -501,10 +725,16 @@ async def explain_query_plan(sql: str, ctx: Context) -> str:
                 lines.append(f"  - {s}")
         return wrap_untrusted("\n".join(lines))
     except PermissionError as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({"error": f"Permission error: {e}"})
         return wrap_untrusted(f"Permission error: {e}")
     except oracledb.Error as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({"error": f"Database error obtaining plan: {e}"})
         return wrap_untrusted(f"Database error obtaining plan: {e}")
     except Exception as e:
+        if OUTPUT_FORMAT == "json":
+            return format_as_json({"error": f"Unexpected error obtaining plan: {e}"})
         return wrap_untrusted(f"Unexpected error obtaining plan: {e}")
 
 if __name__ == "__main__":

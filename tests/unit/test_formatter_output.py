@@ -1,4 +1,5 @@
-from db_context.schema.formatter import format_sql_query_result, MAX_CELL_WIDTH
+import json
+from db_context.schema.formatter import format_sql_query_result, format_as_json, MAX_CELL_WIDTH
 
 
 def test_format_sql_query_result_basic_table():
@@ -45,3 +46,58 @@ def test_format_sql_query_result_truncation_and_note():
     assert lines[1].startswith("| ---")
     assert "…" in lines[2], "Truncated ellipsis missing in data row"
     assert any(line.startswith("Note: Some values truncated") for line in lines[3:]), "Truncation note missing"
+
+
+def test_format_sql_query_result_json_output():
+    """Test JSON output format for SQL query results."""
+    result = {
+        "columns": ["ID", "NAME"],
+        "rows": [
+            {"ID": 1, "NAME": "ALPHA"},
+            {"ID": 2, "NAME": "BETA"},
+        ],
+        "row_count": 2
+    }
+    
+    json_output = format_sql_query_result(result, output_format="json")
+    parsed = json.loads(json_output)
+    
+    assert parsed["row_count"] == 2
+    assert parsed["columns"] == ["ID", "NAME"]
+    assert len(parsed["rows"]) == 2
+    assert parsed["rows"][0]["ID"] == 1
+    assert parsed["rows"][0]["NAME"] == "ALPHA"
+    assert parsed["rows"][1]["ID"] == 2
+    assert parsed["rows"][1]["NAME"] == "BETA"
+
+
+def test_format_sql_query_result_json_empty():
+    """Test JSON output format for empty query results."""
+    result = {
+        "columns": ["ID"],
+        "rows": [],
+        "row_count": 0
+    }
+    
+    json_output = format_sql_query_result(result, output_format="json")
+    parsed = json.loads(json_output)
+    
+    assert parsed["row_count"] == 0
+    assert parsed["columns"] == ["ID"]
+    assert parsed["rows"] == []
+    assert "message" in parsed
+
+
+def test_format_as_json_helper():
+    """Test the format_as_json helper function."""
+    data = {
+        "test": "value",
+        "number": 42,
+        "list": [1, 2, 3],
+        "nested": {"key": "value"}
+    }
+    
+    json_output = format_as_json(data)
+    parsed = json.loads(json_output)
+    
+    assert parsed == data

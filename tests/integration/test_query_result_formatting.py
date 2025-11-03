@@ -1,6 +1,8 @@
+import json
 import pytest
+import os
 from db_context import DatabaseContext
-from db_context.schema.formatter import format_sql_query_result, MAX_CELL_WIDTH
+from db_context.schema.formatter import format_sql_query_result, format_as_json, MAX_CELL_WIDTH
 
 pytestmark = pytest.mark.asyncio
 
@@ -24,3 +26,32 @@ async def test_escape_pipes_and_backticks(db_context_read_only: DatabaseContext)
     assert 'a\\|b' in md
     # Backticks replaced
     assert '`' not in md
+
+
+async def test_json_output_format(db_context_read_only: DatabaseContext):
+    """Test that JSON output format works correctly with actual database queries."""
+    sql = "SELECT 1 AS ID, 'TEST' AS NAME FROM dual"
+    result = await db_context_read_only.run_sql_query(sql)
+    
+    json_output = format_sql_query_result(result, output_format="json")
+    parsed = json.loads(json_output)
+    
+    assert parsed["row_count"] == 1
+    assert "ID" in parsed["columns"]
+    assert "NAME" in parsed["columns"]
+    assert len(parsed["rows"]) == 1
+    assert parsed["rows"][0]["ID"] == 1
+    assert parsed["rows"][0]["NAME"] == "TEST"
+
+
+async def test_json_output_format_empty_result(db_context_read_only: DatabaseContext):
+    """Test JSON output for empty query results."""
+    sql = "SELECT * FROM dual WHERE 1=0"
+    result = await db_context_read_only.run_sql_query(sql)
+    
+    json_output = format_sql_query_result(result, output_format="json")
+    parsed = json.loads(json_output)
+    
+    assert parsed["row_count"] == 0
+    assert "message" in parsed
+    assert "returned no rows" in parsed["message"]
