@@ -739,5 +739,9 @@ async def explain_query_plan(sql: str, ctx: Context) -> str:
             return format_as_json({"error": f"Unexpected error obtaining plan: {e}"})
         return wrap_untrusted(f"Unexpected error obtaining plan: {e}")
 
-if __name__ == "__main__":
+def main():
+    """Entry point for console script"""
     mcp.run()
+
+if __name__ == "__main__":
+    main()

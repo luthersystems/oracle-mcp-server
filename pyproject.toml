@@ -10,6 +10,9 @@ dependencies = [
     "sqlparse>=0.4.4",
 ]
 
+[project.scripts]
+oracle-mcp-server = "main:main"
+
 [project.optional-dependencies]
 dev = [
     "black",
