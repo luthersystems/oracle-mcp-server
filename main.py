@@ -25,6 +25,16 @@ USE_THICK_MODE = os.getenv('THICK_MODE', '').lower() in ('true', '1', 'yes')  # 
 READ_ONLY_MODE = os.getenv('READ_ONLY_MODE', 'true').lower() not in ('false', '0', 'no')
 ORACLE_CLIENT_LIB_DIR = os.getenv('ORACLE_CLIENT_LIB_DIR', None)
 OUTPUT_FORMAT = os.getenv('OUTPUT_FORMAT', 'markdown').lower()  # Output format: 'markdown' or 'json'
+DISABLE_UNTRUSTED_WRAPPING = os.getenv('DISABLE_UNTRUSTED_WRAPPING', '').lower() in ('true', '1', 'yes')  # Disable untrusted data wrapping for raw output
+
+def maybe_wrap_untrusted(data: str) -> str:
+    """Conditionally wrap data in untrusted boundaries based on DISABLE_UNTRUSTED_WRAPPING flag.
+    
+    Returns the data as-is if wrapping is disabled, otherwise wraps it with untrusted boundaries.
+    """
+    if DISABLE_UNTRUSTED_WRAPPING:
+        return data
+    return wrap_untrusted(data)
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[DatabaseContext]:
@@ -397,7 +407,7 @@ async def get_object_source(object_type: str, object_name: str, ctx: Context) ->
                     "object_name": object_name.upper(),
                     "error": f"No source found for {object_type} {object_name}"
                 })
-            return wrap_untrusted(f"No source found for {object_type} {object_name}")
+            return maybe_wrap_untrusted(f"No source found for {object_type} {object_name}")
         
         if OUTPUT_FORMAT == "json":
             return format_as_json({
@@ -406,7 +416,7 @@ async def get_object_source(object_type: str, object_name: str, ctx: Context) ->
                 "source": source
             })
         
-        return wrap_untrusted(f"Source for {object_type} {object_name}:\n\n{source}")
+        return maybe_wrap_untrusted(f"Source for {object_type} {object_name}:\n\n{source}")
     except Exception as e:
         if OUTPUT_FORMAT == "json":
             return format_as_json({
@@ -414,7 +424,7 @@ async def get_object_source(object_type: str, object_name: str, ctx: Context) ->
                 "object_name": object_name.upper(),
                 "error": f"Error retrieving object source: {str(e)}"
             })
-        return wrap_untrusted(f"Error retrieving object source: {str(e)}")
+        return maybe_wrap_untrusted(f"Error retrieving object source: {str(e)}")
 
 @mcp.tool()
 async def get_table_constraints(table_name: str, ctx: Context) -> str:
@@ -683,19 +693,19 @@ async def run_sql_query(sql: str, ctx: Context, max_rows: int = 100) -> str:
             # Write or empty read response
             if "message" in result:
                 if OUTPUT_FORMAT == "json":
-                    return wrap_untrusted(format_as_json({"message": result["message"]}))
-                return wrap_untrusted(result["message"])  # keep consistency
+                    return maybe_wrap_untrusted(format_as_json({"message": result["message"]}))
+                return maybe_wrap_untrusted(result["message"])  # keep consistency
             if OUTPUT_FORMAT == "json":
-                return wrap_untrusted(format_as_json({"message": "Query executed successfully, but returned no rows."}))
-            return wrap_untrusted("Query executed successfully, but returned no rows.")
+                return maybe_wrap_untrusted(format_as_json({"message": "Query executed successfully, but returned no rows."}))
+            return maybe_wrap_untrusted("Query executed successfully, but returned no rows.")
         formatted_result = format_sql_query_result(result, output_format=OUTPUT_FORMAT)
-        return wrap_untrusted(formatted_result)
+        return maybe_wrap_untrusted(formatted_result)
     except PermissionError as e:
-        return wrap_untrusted(f"Permission error: {e}")
+        return maybe_wrap_untrusted(f"Permission error: {e}")
     except oracledb.Error as e:
-        return wrap_untrusted(f"Database error: {e}")
+        return maybe_wrap_untrusted(f"Database error: {e}")
     except Exception as e:
-        return wrap_untrusted(f"Unexpected error executing query: {e}")
+        return maybe_wrap_untrusted(f"Unexpected error executing query: {e}")
 
 @mcp.tool()
 async def explain_query_plan(sql: str, ctx: Context) -> str:
@@ -717,27 +727,27 @@ async def explain_query_plan(sql: str, ctx: Context) -> str:
         
         # Standardize error wrapping for markdown
         if plan.get("error"):
-            return wrap_untrusted(f"Explain plan unavailable: {plan['error']}")
+            return maybe_wrap_untrusted(f"Explain plan unavailable: {plan['error']}")
         if not plan.get("execution_plan"):
-            return wrap_untrusted("No execution plan rows returned.")
+            return maybe_wrap_untrusted("No execution plan rows returned.")
         lines = ["Execution Plan:"] + [f"  {step}" for step in plan["execution_plan"]]
         if plan.get("optimization_suggestions"):
             lines.append("\nSuggestions:")
             for s in plan["optimization_suggestions"]:
                 lines.append(f"  - {s}")
-        return wrap_untrusted("\n".join(lines))
+        return maybe_wrap_untrusted("\n".join(lines))
     except PermissionError as e:
         if OUTPUT_FORMAT == "json":
             return format_as_json({"error": f"Permission error: {e}"})
-        return wrap_untrusted(f"Permission error: {e}")
+        return maybe_wrap_untrusted(f"Permission error: {e}")
     except oracledb.Error as e:
         if OUTPUT_FORMAT == "json":
             return format_as_json({"error": f"Database error obtaining plan: {e}"})
-        return wrap_untrusted(f"Database error obtaining plan: {e}")
+        return maybe_wrap_untrusted(f"Database error obtaining plan: {e}")
     except Exception as e:
         if OUTPUT_FORMAT == "json":
             return format_as_json({"error": f"Unexpected error obtaining plan: {e}"})
-        return wrap_untrusted(f"Unexpected error obtaining plan: {e}")
+        return maybe_wrap_untrusted(f"Unexpected error obtaining plan: {e}")
 
 def main():
     """Entry point for console script"""
