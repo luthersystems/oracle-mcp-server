@@ -31,7 +31,6 @@ python_version = "3.12"
 strict = true
 
 [tool.setuptools]
-packages = ["."]
 py-modules = ["main"]
 
 [build-system]
