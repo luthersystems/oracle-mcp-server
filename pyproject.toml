@@ -30,8 +30,10 @@ line-length = 88
 python_version = "3.12"
 strict = true
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["db_context*"]
 [tool.setuptools]
-packages = ["db_context"]
 py-modules = ["main"]
 
 [build-system]
