@@ -31,6 +31,7 @@ python_version = "3.12"
 strict = true
 
 [tool.setuptools]
+packages = ["db_context"]
 py-modules = ["main"]
 
 [build-system]
